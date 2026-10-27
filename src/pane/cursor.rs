@@ -253,10 +253,13 @@ fn same_cursor_position(left: TerminalCursorState, right: TerminalCursorState) -
     left.x == right.x && left.y == right.y
 }
 
-/// A cursor move that changes row, or jumps more than a couple of columns, is
-/// the shape of a redraw parking the cursor rather than an ordinary caret step.
+/// A cursor move that changes row, or jumps back more than a couple of
+/// columns, is the shape of a redraw parking the cursor rather than an
+/// ordinary caret step. Same-row forward moves are caret advances: a CJK IME
+/// commit inserts several wide characters at once and must not be held for
+/// the max window at the pre-commit position.
 fn is_jump(settled: TerminalCursorState, current: TerminalCursorState) -> bool {
-    current.y != settled.y || current.x.abs_diff(settled.x) > 2
+    current.y != settled.y || current.x.saturating_add(2) < settled.x
 }
 
 #[cfg(test)]
@@ -747,6 +750,26 @@ mod tests {
                 now + CURSOR_POSITION_SETTLE + Duration::from_millis(82)
             ),
             Some(cursor(4, 26, true, 0))
+        );
+    }
+
+    #[test]
+    fn cursor_settle_treats_ime_commit_advance_as_caret_step() {
+        let now = Instant::now();
+        let mut settle = CursorPositionSettleState::default();
+        let caret = cursor(2, 10, true, 0);
+        // Committing "你好" advances the caret four cells; a redraw may park at column 0 first.
+        let committed = cursor(6, 10, true, 0);
+        settle.observe(Some(caret), now);
+        settle.observe(Some(cursor(0, 10, true, 0)), now + Duration::from_millis(1));
+        settle.observe(Some(committed), now + Duration::from_millis(2));
+        assert_eq!(settle.render_delay(), Some(CURSOR_POSITION_SETTLE));
+        assert_eq!(
+            settle.reported_cursor(
+                Some(committed),
+                now + CURSOR_POSITION_SETTLE + Duration::from_millis(3)
+            ),
+            Some(committed)
         );
     }
 }
